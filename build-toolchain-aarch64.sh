@@ -74,7 +74,7 @@ skip_mingw32=no
 DEBUG_BUILD_OPTIONS=
 is_ppa_release=no
 is_native_build=yes
-skip_manual=yes
+skip_manual=no
 skip_steps=
 skip_gdb_with_python=no
 skip_mingw32_gdb_with_python=no
@@ -174,17 +174,19 @@ if [ "x$is_ppa_release" != "xyes" ]; then
     ENV_LDFLAGS+=" -L$SRCDIR/$PYTHON_WIN/lib "
   fi
 
-  GCC_CONFIG_OPTS=" --with-gmp=$BUILDDIR_NATIVE/host-libs/usr
+  GCC_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE
+                    --with-gmp=$BUILDDIR_NATIVE/host-libs/usr
                     --with-mpfr=$BUILDDIR_NATIVE/host-libs/usr
                     --with-mpc=$BUILDDIR_NATIVE/host-libs/usr
                     --with-isl=$BUILDDIR_NATIVE/host-libs/usr
                     --with-libelf=$BUILDDIR_NATIVE/host-libs/usr "
 
-  BINUTILS_CONFIG_OPTS=" "
+  BINUTILS_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE "
 
-  NEWLIB_CONFIG_OPTS=" "
+  NEWLIB_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE "
 
-  GDB_CONFIG_OPTS=" --with-libexpat-prefix=$BUILDDIR_NATIVE/host-libs/usr "
+  GDB_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE
+                    --with-libexpat-prefix=$BUILDDIR_NATIVE/host-libs/usr "
 fi
 
 mkdir -p $BUILDDIR_NATIVE
