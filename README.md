@@ -1,4 +1,4 @@
-# gcc-arm-embedded-build-rpi
+# gcc-arm-embedded-build-armhf
 GCC ARM embedded prebuild compiler for Raspberry Pi and Jetson TX2 
 Source:https://launchpad.net/~terry.guo/+archive/gcc-arm-embedded
 
