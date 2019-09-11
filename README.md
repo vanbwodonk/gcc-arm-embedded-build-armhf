@@ -1,2 +1,16 @@
 # gcc-arm-embedded-build-rpi
-Gcc ARM embedded build for RPi
+GCC ARM embedded prebuild compiler for Raspberry Pi and Jetson TX2 
+Source:https://launchpad.net/~terry.guo/+archive/gcc-arm-embedded
+
+## installation
+### install on Raspberry Pi
+install via raspberry pi terminal:
+    
+### install on Jetson TX2       
+install via jetson TX2 terminal:
+```bash
+wget https://github.com/vanbwodonk/gcc-arm-embedded-build-rpi/raw/master/pkg/gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64.tar.bz2
+tar -xvf gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64.tar.bz2
+sudo mv gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64/* /usr/
+```
+
