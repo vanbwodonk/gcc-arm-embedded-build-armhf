@@ -1,4 +1,4 @@
-# Copyright (c) 2011-2015, ARM Limited
+# Copyright (c) 2011-2019, ARM Limited
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -50,10 +50,10 @@ copy_dir_clean() {
     set +u
     mkdir -p "$2"
     (cd "$1" && tar cf - \
-	--exclude=CVS --exclude=.svn --exclude=.git --exclude=.pc \
-	--exclude="*~" --exclude=".#*" \
-	--exclude="*.orig" --exclude="*.rej" \
-	.) | (cd "$2" && tar xf -)
+        --exclude=CVS --exclude=.svn --exclude=.git --exclude=.pc \
+        --exclude="*~" --exclude=".#*" \
+        --exclude="*.orig" --exclude="*.rej" \
+        .) | (cd "$2" && tar xf -)
     set -u
 }
 
@@ -67,10 +67,10 @@ copy_dir_clean() {
 pack_dir_clean() {
     set +u
     tar cjfh $3 \
-	--exclude=CVS --exclude=.svn --exclude=.git --exclude=.pc \
-	--exclude="*~" --exclude=".#*" \
-	--exclude="*.orig" --exclude="*.rej" $4 $5 $6 $7 $8 $9 ${10} \
-	-C $1 $2
+        --exclude=CVS --exclude=.svn --exclude=.git --exclude=.pc \
+        --exclude="*~" --exclude=".#*" \
+        --exclude="*.orig" --exclude="*.rej" $4 $5 $6 $7 $8 $9 ${10} \
+        -C $1 $2
     set -u
 }
 
@@ -78,28 +78,18 @@ pack_dir_clean() {
 clean_env () {
     set +u
     local var_list
-    local var
-    var_list=`export|grep "^declare -x"|sed -e "s/declare -x //"|cut -d"=" -f1`
+    var_list=$(export | sed -e "s/declare -x //" | cut -d= -f1 | grep -E '[[:upper:]]+\b')
 
     for var in $var_list ; do
-        case $var in
-            DEJAGNU|\
-            DISPLAY|\
-            HOME|\
-            LD_LIBRARY_PATH|\
-            LOGNAME|\
-            PATH|\
-            PWD|\
-            SHELL|\
-            SHLVL|\
-            TERM|\
-            USER|\
-            USERNAME|\
-            com.apple.*|\
-            XAUTHORITY)
+        case "$var" in
+        DEJAGNU | DISPLAY | HOME | LD_LIBRARY_PATH | LOGNAME | PATH | PWD | SHELL | SHLVL | TERM | USER | USERNAME | XAUTHORITY)
+            ;;
+        com.apple.*)
+            ;;
+        LSB_* | LSF_* | LS_* | EGO_* | HOSTTYPE | TMPDIR)
             ;;
         *)
-            unset $var
+            unset "$var"
             ;;
         esac
     done
@@ -260,9 +250,9 @@ MPC_VER=1.0.3
 ISL_VER=0.18
 EXPAT_VER=2.1.1
 LIBELF_VER=0.8.13
-LIBICONV_VER=1.14
+LIBICONV_VER=1.15
 ZLIB_VER=1.2.8
-PYTHON_WIN_VER=2.7.13
+PYTHON_WIN_VER=2.7.7
 
 BINUTILS=binutils
 GCC=gcc
@@ -305,9 +295,9 @@ ZLIB_URL=http://www.zlib.net/fossils/$ZLIB_PACK
 ENV_VAR_UPDATE_URL=http://nsis.sourceforge.net/mediawiki/images/a/ad/$ENV_VAR_UPDATE_PACK
 PYTHON_WIN_URL=https://www.python.org/ftp/python/$PYTHON_WIN_VER/$PYTHON_WIN_PACK
 
+TAR=tar
 # Set variables according to real environment to make this script can run
 # on Ubuntu and Mac OS X.
-TAR=tar
 uname_string=`uname | sed 'y/LINUXDARWIN/linuxdarwin/'`
 host_arch=`uname -m | sed 'y/XI/xi/'`
 if [ "x$uname_string" == "xlinux" ] ; then
@@ -315,20 +305,23 @@ if [ "x$uname_string" == "xlinux" ] ; then
     HOST_NATIVE="$host_arch"-linux-gnu
     READLINK=readlink
     #JOBS=`grep ^processor /proc/cpuinfo|wc -l`
-    JOBS=3
+    JOBS=2
     GCC_CONFIG_OPTS_LCPP="--with-host-libstdcxx=-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm"
     MD5="md5sum -b"
-    PACKAGE_NAME_SUFFIX=linux
+    PACKAGE_NAME_SUFFIX="${host_arch}-linux"
+    WGET="wget -q"
 elif [ "x$uname_string" == "xdarwin" ] ; then
     BUILD=x86_64-apple-darwin10
     HOST_NATIVE=x86_64-apple-darwin10
     READLINK=greadlink
     # Disable parallel build for mac as we will randomly run into "Permission denied" issue.
-    JOBS=`sysctl -n hw.ncpu`
-    #JOBS=1
+    #JOBS=`sysctl -n hw.ncpu`
+    JOBS=1
     GCC_CONFIG_OPTS_LCPP="--with-host-libstdcxx=-static-libgcc -Wl,-lstdc++ -lm"
     MD5="md5 -r"
     PACKAGE_NAME_SUFFIX=mac
+    #Redefine wget command to curl as MacOS does not have wget by default
+    WGET="curl -OLs"
 else
     error "Unsupported build system : $uname_string"
 fi
@@ -346,9 +339,9 @@ if [ "${SCRIPT%%-*}" = "build" ]; then
 
     stack_level=0
 
-    RELEASEDATE=`date +%Y%m%d`
-    release_year=${RELEASEDATE:0:4}
-    release_month=${RELEASEDATE:4:2}
+    RELEASEDATE=$(date +%Y%m%d)
+    release_year=$(date +%Y)
+    release_month=$(date +%m)
     case $release_month in
         01|02|03)
             RELEASEVER=${release_year}-q1-update

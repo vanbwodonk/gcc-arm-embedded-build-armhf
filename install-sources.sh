@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2011-2017, ARM Limited
+# Copyright (c) 2011-2019, ARM Limited
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -69,46 +69,51 @@ for ac_arg; do
             ;;
         *)
             usage
-	    exit 1
+            exit 1
             ;;
     esac
 done
 
 if [ "x$skip_steps" != "x" ]; then
-        for ss in $skip_steps; do
-                case $ss in
-                    mingw32)
-                      skip_mingw32=yes
-                      ;;
-                    *)
-                      echo "Unknown build steps: $ss" 1>&2
-                      usage
-                      exit 1
-                      ;;
-                esac
-        done
+    for ss in $skip_steps; do
+        case $ss in
+            mingw32)
+                skip_mingw32=yes
+                ;;
+            howto | package_sources | md5_checksum)
+                ;;
+            *)
+                echo "Unknown build steps: $ss" 1>&2
+                usage
+                exit 1
+                ;;
+        esac
+    done
 fi
 
 cd $SRCDIR
 for prereq in $PREREQS; do
     if [ -z "${WIN_PREREQS%%*${prereq}*}" -a $skip_mingw32 = yes ]; then
-	continue
+        continue
     fi
     eval prereq_pack="\$${prereq}_PACK"
     if [ ! -f $prereq_pack ]; then
         eval prereq_url="\$${prereq}_URL"
-        wget -q $prereq_url
+        $WGET $prereq_url
     fi
 done
 
 for archive in *; do
     case $archive in
         *.tar.*)
-            tar xf $archive;;
+            tar xf $archive
+            ;;
         *.msi)
             mkdir ${archive%.msi}
-	    7za x -o${archive%.msi} $archive;;
+            7za x -o${archive%.msi} $archive
+            ;;
         *.7z)
-            7z x $archive;;
+            7z x $archive
+            ;;
     esac
 done

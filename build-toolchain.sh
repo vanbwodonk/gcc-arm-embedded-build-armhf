@@ -1,5 +1,5 @@
 #! /usr/bin/env bash
-# Copyright (c) 2011-2015, ARM Limited
+# Copyright (c) 2011-2019, ARM Limited
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,11 +31,15 @@ set -x
 set -u
 set -o pipefail
 
+if [[ "$(uname)" != "Darwin" ]]; then
+  PS4='+$(date +%Y-%m-%d:%H:%M:%S) (${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+fi
+
 umask 022
 
 exec < /dev/null
 
-script_path=`cd $(dirname $0) && pwd -P`
+script_path=$(cd $(dirname $0) && pwd -P)
 . $script_path/build-common.sh
 
 # This file contains the sequence of commands used to build the
@@ -60,9 +64,15 @@ OPTIONS:
                         --build_type=ppa,debug
 
   --skip_steps=STEPS    specify which build steps you want to skip.  Concatenate
-                        them with comma for skipping more than one steps.  Available
-                        steps are: gdb-with-python, mingw32, mingw32-gdb-with-python
-                        and manual.
+                        them with comma for skipping more than one steps.
+                        Available steps are:
+                            gdb-with-python
+                            mingw32
+                            mingw32-gdb-with-python
+                            package_sources
+                            md5_checksum
+                            howto
+                            manual
 EOF
 }
 
@@ -71,10 +81,14 @@ if [ $# -gt 3 ] ; then
 fi
 
 skip_mingw32=no
-DEBUG_BUILD_OPTIONS=
+BUILD_OPTIONS="-g -O2"
 is_ppa_release=no
 is_native_build=yes
-skip_manual=yes
+is_debug_build=no
+skip_manual=no
+skip_howto=no
+skip_package_sources=no
+skip_md5_checksum=no
 skip_steps=
 skip_gdb_with_python=no
 skip_mingw32_gdb_with_python=no
@@ -84,16 +98,16 @@ MULTILIB_LIST="--with-multilib-list=rmprofile"
 
 for ac_arg; do
     case $ac_arg in
-      --skip_steps=*)
-	      skip_steps=`echo $ac_arg | sed -e "s/--skip_steps=//g" -e "s/,/ /g"`
-	      ;;
-      --build_type=*)
-	      build_type=`echo $ac_arg | sed -e "s/--build_type=//g" -e "s/,/ /g"`
-	      ;;
-      *)
-        usage
-        exit 1
-        ;;
+        --skip_steps=*)
+            skip_steps=$(echo $ac_arg | sed -e "s/--skip_steps=//g" -e "s/,/ /g")
+            ;;
+        --build_type=*)
+            build_type=$(echo $ac_arg | sed -e "s/--build_type=//g" -e "s/,/ /g")
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
     esac
 done
 
@@ -110,7 +124,8 @@ if [ "x$build_type" != "x" ]; then
         is_ppa_release=no
         ;;
       debug)
-        DEBUG_BUILD_OPTIONS=" -O0 -g "
+        BUILD_OPTIONS="-g -O0"
+        is_debug_build=yes
         ;;
       *)
         echo "Unknown build type: $bt" 1>&2
@@ -125,35 +140,48 @@ else
 fi
 
 if [ "x$skip_steps" != "x" ]; then
-	for ss in $skip_steps; do
-		case $ss in
-		    manual)
-                      skip_manual=yes
-                      ;;
-		    gdb-with-python)
-                      skip_gdb_with_python=yes
-                      ;;
-	            mingw32)
-                      skip_mingw32=yes
-                      skip_mingw32_gdb_with_python=yes
-                      ;;
-                    mingw32-gdb-with-python)
-                      skip_mingw32_gdb_with_python=yes
-                      ;;
-                    *)
-                      echo "Unknown build steps: $ss" 1>&2
-                      usage
-                      exit 1
-                      ;;
-		esac
-	done
+    for ss in $skip_steps; do
+        case $ss in
+            manual)
+                skip_manual=yes
+                ;;
+            howto)
+                skip_howto=yes
+                ;;
+            package_sources)
+                skip_package_sources=yes
+                ;;
+            md5_checksum)
+                skip_md5_checksum=yes
+                ;;
+            gdb-with-python)
+                skip_gdb_with_python=yes
+                ;;
+            mingw32)
+                skip_mingw32=yes
+                skip_mingw32_gdb_with_python=yes
+                ;;
+            mingw32-gdb-with-python)
+                skip_mingw32_gdb_with_python=yes
+                ;;
+            *)
+               echo "Unknown build steps: $ss" 1>&2
+               usage
+               exit 1
+               ;;
+        esac
+    done
 fi
 
-CXXFLAGS=
+if dpkg-query -W lbzip2 > /dev/null 2>&1; then
+    echo "Using multi-threaded bzip2 compression"
+    TAR_FLAGS="--use-compress-program=lbzip2"
+fi
+
 if [ "x$BUILD" == "xx86_64-apple-darwin10" ] || [ "x$is_ppa_release" == "xyes" ]; then
     skip_mingw32=yes
     skip_mingw32_gdb_with_python=yes
-    CXXFLAGS="-fbracket-depth=512"
+    BUILD_OPTIONS="$BUILD_OPTIONS -fbracket-depth=512"
 fi
 
 #Building mingw gdb with python support requires python windows package and
@@ -165,7 +193,7 @@ if [ ! -d $SRCDIR/$PYTHON_WIN ] \
 fi
 
 if [ "x$is_ppa_release" != "xyes" ]; then
-  ENV_CFLAGS=" -I$BUILDDIR_NATIVE/host-libs/zlib/include -O2 "
+  ENV_CFLAGS=" -I$BUILDDIR_NATIVE/host-libs/zlib/include $BUILD_OPTIONS "
   ENV_CPPFLAGS=" -I$BUILDDIR_NATIVE/host-libs/zlib/include "
   ENV_LDFLAGS=" -L$BUILDDIR_NATIVE/host-libs/zlib/lib
                 -L$BUILDDIR_NATIVE/host-libs/usr/lib "
@@ -174,24 +202,26 @@ if [ "x$is_ppa_release" != "xyes" ]; then
     ENV_LDFLAGS+=" -L$SRCDIR/$PYTHON_WIN/lib "
   fi
 
-  GCC_CONFIG_OPTS=" --with-gmp=$BUILDDIR_NATIVE/host-libs/usr
+  GCC_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE
+                    --with-gmp=$BUILDDIR_NATIVE/host-libs/usr
                     --with-mpfr=$BUILDDIR_NATIVE/host-libs/usr
                     --with-mpc=$BUILDDIR_NATIVE/host-libs/usr
                     --with-isl=$BUILDDIR_NATIVE/host-libs/usr
                     --with-libelf=$BUILDDIR_NATIVE/host-libs/usr "
 
-  BINUTILS_CONFIG_OPTS=" "
+  BINUTILS_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE "
 
-  NEWLIB_CONFIG_OPTS=" "
+  NEWLIB_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE "
 
-  GDB_CONFIG_OPTS=" --with-libexpat-prefix=$BUILDDIR_NATIVE/host-libs/usr "
+  GDB_CONFIG_OPTS=" --build=$BUILD --host=$HOST_NATIVE
+                    --with-libexpat-prefix=$BUILDDIR_NATIVE/host-libs/usr "
 fi
 
 mkdir -p $BUILDDIR_NATIVE
 rm -rf $INSTALLDIR_NATIVE && mkdir -p $INSTALLDIR_NATIVE
 if [ "x$skip_mingw32" != "xyes" ] ; then
-mkdir -p $BUILDDIR_MINGW
-rm -rf $INSTALLDIR_MINGW && mkdir -p $INSTALLDIR_MINGW
+    mkdir -p $BUILDDIR_MINGW
+    rm -rf $INSTALLDIR_MINGW && mkdir -p $INSTALLDIR_MINGW
 fi
 rm -rf $PACKAGEDIR && mkdir -p $PACKAGEDIR
 
@@ -221,16 +251,12 @@ $SRCDIR/$BINUTILS/configure  \
     --with-sysroot=$INSTALLDIR_NATIVE/arm-none-eabi \
     "--with-pkgversion=$PKGVERSION"
 
-if [ "x$DEBUG_BUILD_OPTIONS" != "x" ] ; then
-    make CFLAGS="-I$BUILDDIR_NATIVE/host-libs/zlib/include $DEBUG_BUILD_OPTIONS" -j$JOBS
-else
-    make -j$JOBS
-fi
+make -j$JOBS
 
 make install
 
 if [ "x$skip_manual" != "xyes" ]; then
-	make install-html install-pdf
+    make install-html install-pdf
 fi
 
 copy_dir $INSTALLDIR_NATIVE $BUILDDIR_NATIVE/target-libs
@@ -274,7 +300,7 @@ $SRCDIR/$GCC/configure --target=$TARGET \
     "--with-pkgversion=$PKGVERSION" \
     ${MULTILIB_LIST}
 
-make -j$JOBS CXXFLAGS="${CXXFLAGS:-}" all-gcc
+make -j$JOBS CXXFLAGS="$BUILD_OPTIONS" all-gcc
 
 make install-gcc
 
@@ -313,15 +339,15 @@ make -j$JOBS
 make install
 
 if [ "x$skip_manual" != "xyes" ]; then
-make pdf
-mkdir -p $INSTALLDIR_NATIVE_DOC/pdf
-cp $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libc/libc.pdf $INSTALLDIR_NATIVE_DOC/pdf/libc.pdf
-cp $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libm/libm.pdf $INSTALLDIR_NATIVE_DOC/pdf/libm.pdf
+    make pdf
+    mkdir -p $INSTALLDIR_NATIVE_DOC/pdf
+    cp $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libc/libc.pdf $INSTALLDIR_NATIVE_DOC/pdf/libc.pdf
+    cp $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libm/libm.pdf $INSTALLDIR_NATIVE_DOC/pdf/libm.pdf
 
-make html
-mkdir -p $INSTALLDIR_NATIVE_DOC/html
-copy_dir $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libc/libc.html $INSTALLDIR_NATIVE_DOC/html/libc
-copy_dir $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libm/libm.html $INSTALLDIR_NATIVE_DOC/html/libm
+    make html
+    mkdir -p $INSTALLDIR_NATIVE_DOC/html
+    copy_dir $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libc/libc.html $INSTALLDIR_NATIVE_DOC/html/libc
+    copy_dir $BUILDDIR_NATIVE/newlib/arm-none-eabi/newlib/libm/libm.html $INSTALLDIR_NATIVE_DOC/html/libm
 fi
 
 popd
@@ -399,22 +425,18 @@ $SRCDIR/$GCC/configure --target=$TARGET \
 # transactional memory related code in crtbegin.o.
 # This is a workaround. Better approach is have a t-* to set this flag via
 # CRTSTUFF_T_CFLAGS
-if [ "x$DEBUG_BUILD_OPTIONS" != "x" ]; then
-  make -j$JOBS CXXFLAGS="${CXXFLAGS:-} $DEBUG_BUILD_OPTIONS" \
-	       INHIBIT_LIBC_CFLAGS="-DUSE_TM_CLONE_REGISTRY=0"
-else
-  make -j$JOBS CXXFLAGS="${CXXFLAGS:-}" INHIBIT_LIBC_CFLAGS="-DUSE_TM_CLONE_REGISTRY=0"
-fi
+make -j$JOBS CXXFLAGS="$BUILD_OPTIONS" \
+        INHIBIT_LIBC_CFLAGS="-DUSE_TM_CLONE_REGISTRY=0"
 
 make install
 
 if [ "x$skip_manual" != "xyes" ]; then
-	make install-html install-pdf
+    make install-html install-pdf
 fi
 
 pushd $INSTALLDIR_NATIVE
 rm -rf bin/arm-none-eabi-gccbug
-LIBIBERTY_LIBRARIES=`find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name libiberty.a`
+LIBIBERTY_LIBRARIES=$(find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name libiberty.a)
 for libiberty_lib in $LIBIBERTY_LIBRARIES ; do
     rm -rf $libiberty_lib
 done
@@ -458,7 +480,7 @@ $SRCDIR/$GCC/configure --target=$TARGET \
     "--with-pkgversion=$PKGVERSION" \
     ${MULTILIB_LIST}
 
-make -j$JOBS CXXFLAGS="${CXXFLAGS:-}" CXXFLAGS_FOR_TARGET="-g -Os -ffunction-sections -fdata-sections -fno-exceptions"
+make -j$JOBS CCXXFLAGS="$BUILD_OPTIONS" CXXFLAGS_FOR_TARGET="-g -Os -ffunction-sections -fdata-sections -fno-exceptions"
 make install
 
 copy_multi_libs src_prefix="$BUILDDIR_NATIVE/target-libs/arm-none-eabi/lib" \
@@ -476,80 +498,76 @@ popd
 echo Task [III-6] /$HOST_NATIVE/gdb/
 build_gdb()
 {
-	GDB_EXTRA_CONFIG_OPTS=$1
+    GDB_EXTRA_CONFIG_OPTS=$1
 
-	rm -rf $BUILDDIR_NATIVE/gdb && mkdir -p $BUILDDIR_NATIVE/gdb
-	pushd $BUILDDIR_NATIVE/gdb
-	saveenv
-	saveenvvar CFLAGS "$ENV_CFLAGS"
-	saveenvvar CPPFLAGS "$ENV_CPPFLAGS"
-	saveenvvar LDFLAGS "$ENV_LDFLAGS"
+    rm -rf $BUILDDIR_NATIVE/gdb && mkdir -p $BUILDDIR_NATIVE/gdb
+    pushd $BUILDDIR_NATIVE/gdb
+    saveenv
+    saveenvvar CFLAGS "$ENV_CFLAGS"
+    saveenvvar CPPFLAGS "$ENV_CPPFLAGS"
+    saveenvvar LDFLAGS "$ENV_LDFLAGS"
 
-	$SRCDIR/$GDB/configure  \
-	    --target=$TARGET \
-	    --prefix=$INSTALLDIR_NATIVE \
-	    --infodir=$INSTALLDIR_NATIVE_DOC/info \
-	    --mandir=$INSTALLDIR_NATIVE_DOC/man \
-	    --htmldir=$INSTALLDIR_NATIVE_DOC/html \
-	    --pdfdir=$INSTALLDIR_NATIVE_DOC/pdf \
-	    --disable-nls \
-	    --disable-sim \
-	    --disable-gas \
-	    --disable-binutils \
-	    --disable-ld \
-	    --disable-gprof \
-	    --with-libexpat \
-	    --with-lzma=no \
-	    --with-system-gdbinit=$INSTALLDIR_NATIVE/$HOST_NATIVE/arm-none-eabi/lib/gdbinit \
-	    $GDB_CONFIG_OPTS \
-	    $GDB_EXTRA_CONFIG_OPTS \
-	    '--with-gdb-datadir='\''${prefix}'\''/arm-none-eabi/share/gdb' \
-	    "--with-pkgversion=$PKGVERSION"
+    $SRCDIR/$GDB/configure  \
+        --target=$TARGET \
+        --prefix=$INSTALLDIR_NATIVE \
+        --infodir=$INSTALLDIR_NATIVE_DOC/info \
+        --mandir=$INSTALLDIR_NATIVE_DOC/man \
+        --htmldir=$INSTALLDIR_NATIVE_DOC/html \
+        --pdfdir=$INSTALLDIR_NATIVE_DOC/pdf \
+        --disable-nls \
+        --disable-sim \
+        --disable-gas \
+        --disable-binutils \
+        --disable-ld \
+        --disable-gprof \
+        --with-libexpat \
+        --with-lzma=no \
+        --with-system-gdbinit=$INSTALLDIR_NATIVE/$HOST_NATIVE/arm-none-eabi/lib/gdbinit \
+        $GDB_CONFIG_OPTS \
+        $GDB_EXTRA_CONFIG_OPTS \
+        '--with-gdb-datadir='\''${prefix}'\''/arm-none-eabi/share/gdb' \
+        "--with-pkgversion=$PKGVERSION"
 
-	if [ "x$DEBUG_BUILD_OPTIONS" != "x" ] ; then
-	    make CFLAGS="-I$BUILDDIR_NATIVE/host-libs/zlib/include $DEBUG_BUILD_OPTIONS" -j$JOBS
-	else
-	    make -j$JOBS
-	fi
+    make -j$JOBS
 
-	make install
+    make install
 
-	if [ "x$skip_manual" != "xyes" ]; then
-		make install-html install-pdf
-	fi
+    if [ "x$skip_manual" != "xyes" ]; then
+        make install-html install-pdf
+    fi
 
-	restoreenv
-	popd
+    restoreenv
+    popd
 }
 
 
 #Always enable python support in GDB for PPA build.
 if [ "x$is_ppa_release" == "xyes" ]; then
-	build_gdb "--with-python=yes"
+    build_gdb "--with-python=yes"
 else
-        #First we build GDB without python support.
-	build_gdb "--with-python=no"
+    #First we build GDB without python support.
+    build_gdb "--with-python=no"
 
-	#Then build gdb with python support.
-	if [ "x$skip_gdb_with_python" == "xno" ]; then
-		build_gdb "--with-python=yes --program-prefix=$TARGET-  --program-suffix=-py"
-	fi
+    #Then build gdb with python support.
+    if [ "x$skip_gdb_with_python" == "xno" ]; then
+        build_gdb "--with-python=yes --program-prefix=$TARGET-  --program-suffix=-py"
+    fi
 fi
 
-if [ "x$is_ppa_release" != "xyes" -a "x$skip_manual" != "xyes" ]; then
-echo TASK [III-7] /$HOST_NATIVE/build-manual
-rm -rf $BUILDDIR_NATIVE/build-manual && mkdir -p $BUILDDIR_NATIVE/build-manual
-pushd $BUILDDIR_NATIVE/build-manual
-cp -r $SRCDIR/$BUILD_MANUAL/* .
-echo "@set VERSION_PACKAGE ($PKGVERSION)" > version.texi
-echo "@set CURRENT_YEAR  $release_year" >> version.texi
-echo "@set CURRENT_MONTH $release_month" >> version.texi
-echo "@set PKG_NAME $PACKAGE_NAME" >> version.texi
-make clean
-make
-rm -rf $ROOT/How-to-build-toolchain.pdf
-cp How-to-build-toolchain.pdf $ROOT
-popd
+if [ "x$is_ppa_release" != "xyes" -a "x$skip_howto" != "xyes" ]; then
+    echo TASK [III-7] /$HOST_NATIVE/build-manual
+    rm -rf $BUILDDIR_NATIVE/build-manual && mkdir -p $BUILDDIR_NATIVE/build-manual
+    pushd $BUILDDIR_NATIVE/build-manual
+    cp -r $SRCDIR/$BUILD_MANUAL/* .
+    echo "@set VERSION_PACKAGE ($PKGVERSION)" > version.texi
+    echo "@set CURRENT_YEAR  $release_year" >> version.texi
+    echo "@set CURRENT_MONTH $release_month" >> version.texi
+    echo "@set PKG_NAME $PACKAGE_NAME" >> version.texi
+    make clean
+    make
+    rm -rf $ROOT/How-to-build-toolchain.pdf
+    cp How-to-build-toolchain.pdf $ROOT
+    popd
 fi
 
 echo Task [III-8] /$HOST_NATIVE/pretidy/
@@ -557,21 +575,21 @@ rm -rf $INSTALLDIR_NATIVE/lib/libiberty.a
 find $INSTALLDIR_NATIVE -name '*.la' -exec rm '{}' ';'
 
 echo Task [III-9] /$HOST_NATIVE/strip_host_objects/
-if [ "x$DEBUG_BUILD_OPTIONS" = "x" ] ; then
-    STRIP_BINARIES=`find $INSTALLDIR_NATIVE/bin/ -name arm-none-eabi-\*`
+if [ "x$is_debug_build" == "xno" ] ; then
+    STRIP_BINARIES=$(find $INSTALLDIR_NATIVE/bin/ -name arm-none-eabi-\*)
     for bin in $STRIP_BINARIES ; do
         strip_binary strip $bin
     done
 
-    STRIP_BINARIES=`find $INSTALLDIR_NATIVE/arm-none-eabi/bin/ -maxdepth 1 -mindepth 1 -name \*`
+    STRIP_BINARIES=$(find $INSTALLDIR_NATIVE/arm-none-eabi/bin/ -maxdepth 1 -mindepth 1 -name \*)
     for bin in $STRIP_BINARIES ; do
         strip_binary strip $bin
     done
 
     if [ "x$BUILD" == "xx86_64-apple-darwin10" ]; then
-        STRIP_BINARIES=`find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER/ -maxdepth 1 -name \* -perm +111 -and ! -type d`
+        STRIP_BINARIES=$(find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER/ -maxdepth 1 -name \* -perm +111 -and ! -type d)
     else
-        STRIP_BINARIES=`find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER/ -maxdepth 1 -name \* -perm /111 -and ! -type d`
+        STRIP_BINARIES=$(find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER/ -maxdepth 1 -name \* -perm /111 -and ! -type d)
     fi
     for bin in $STRIP_BINARIES ; do
         strip_binary strip $bin
@@ -581,22 +599,22 @@ fi
 echo Task [III-10] /$HOST_NATIVE/strip_target_objects/
 saveenv
 prepend_path PATH $INSTALLDIR_NATIVE/bin
-TARGET_LIBRARIES=`find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name \*.a`
+TARGET_LIBRARIES=$(find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name \*.a)
 for target_lib in $TARGET_LIBRARIES ; do
     arm-none-eabi-objcopy -R .comment -R .note -R .debug_info -R .debug_aranges -R .debug_pubnames -R .debug_pubtypes -R .debug_abbrev -R .debug_line -R .debug_str -R .debug_ranges -R .debug_loc $target_lib || true
 done
 
-TARGET_OBJECTS=`find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name \*.o`
+TARGET_OBJECTS=$(find $INSTALLDIR_NATIVE/arm-none-eabi/lib -name \*.o)
 for target_obj in $TARGET_OBJECTS ; do
     arm-none-eabi-objcopy -R .comment -R .note -R .debug_info -R .debug_aranges -R .debug_pubnames -R .debug_pubtypes -R .debug_abbrev -R .debug_line -R .debug_str -R .debug_ranges -R .debug_loc $target_obj || true
 done
 
-TARGET_LIBRARIES=`find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER -name \*.a`
+TARGET_LIBRARIES=$(find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER -name \*.a)
 for target_lib in $TARGET_LIBRARIES ; do
     arm-none-eabi-objcopy -R .comment -R .note -R .debug_info -R .debug_aranges -R .debug_pubnames -R .debug_pubtypes -R .debug_abbrev -R .debug_line -R .debug_str -R .debug_ranges -R .debug_loc $target_lib || true
 done
 
-TARGET_OBJECTS=`find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER -name \*.o`
+TARGET_OBJECTS=$(find $INSTALLDIR_NATIVE/lib/gcc/arm-none-eabi/$GCC_VER -name \*.o)
 for target_obj in $TARGET_OBJECTS ; do
     arm-none-eabi-objcopy -R .comment -R .note -R .debug_info -R .debug_aranges -R .debug_pubnames -R .debug_pubtypes -R .debug_abbrev -R .debug_line -R .debug_str -R .debug_ranges -R .debug_loc $target_obj || true
 done
@@ -640,310 +658,334 @@ ${TAR} cjf $PACKAGEDIR/$PACKAGE_NAME_NATIVE.tar.bz2   \
 rm -f $INSTALL_PACKAGE_NAME
 popd
 
+# Extra actions for MacOS build after native toolchain build is completed
+if [ "$(uname)" = "Darwin" ]; then
+    echo "Task [III-12] /$PACKAGEDIR/pkgbuild_macos"
+    # Package MacOS toolchain to unsigned .pkg file
+    MACOS_PKG_TMP_DIR="$(mktemp -d)"
+    tar xf "$PACKAGEDIR/$PACKAGE_NAME_NATIVE.tar.bz2" -C "$MACOS_PKG_TMP_DIR"
+
+    pushd "$MACOS_PKG_TMP_DIR"
+    pkgbuild --root "$PACKAGE_NAME" --identifier "gcc.${TARGET}-${GCC_VER_NAME}" --version "$RELEASEVER" "$PACKAGEDIR/$PACKAGE_NAME_NATIVE.pkg"
+    popd
+    rm -rf "$MACOS_PKG_TMP_DIR"
+fi
+
 # skip building mingw32 toolchain if "--skip_mingw32" specified
 # this huge if statement controls all $BUILDDIR_MINGW tasks till "task [IV-8]"
 if [ "x$skip_mingw32" != "xyes" ] ; then
-saveenv
-saveenvvar CC_FOR_BUILD gcc
-saveenvvar CC $HOST_MINGW_TOOL-gcc
-saveenvvar CXX $HOST_MINGW_TOOL-g++
-saveenvvar AR $HOST_MINGW_TOOL-ar
-saveenvvar RANLIB $HOST_MINGW_TOOL-ranlib
-saveenvvar STRIP $HOST_MINGW_TOOL-strip
-saveenvvar NM $HOST_MINGW_TOOL-nm
+    saveenv
+    saveenvvar CC_FOR_BUILD gcc
+    saveenvvar CC $HOST_MINGW_TOOL-gcc
+    saveenvvar CXX $HOST_MINGW_TOOL-g++
+    saveenvvar AR $HOST_MINGW_TOOL-ar
+    saveenvvar RANLIB $HOST_MINGW_TOOL-ranlib
+    saveenvvar STRIP $HOST_MINGW_TOOL-strip
+    saveenvvar NM $HOST_MINGW_TOOL-nm
 
-echo Task [IV-0] /$HOST_MINGW/host_unpack/
-rm -rf $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE && mkdir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE
-pushd $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE
-ln -s . $INSTALL_PACKAGE_NAME
-tar xf $PACKAGEDIR/$PACKAGE_NAME_NATIVE.tar.bz2 --bzip2
-rm $INSTALL_PACKAGE_NAME
-popd
+    echo Task [IV-0] /$HOST_MINGW/host_unpack/
+    rm -rf $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE && mkdir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE
+    pushd $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE
+    ln -s . $INSTALL_PACKAGE_NAME
+    tar xf $PACKAGEDIR/$PACKAGE_NAME_NATIVE.tar.bz2 ${TAR_FLAGS:-}
+    rm $INSTALL_PACKAGE_NAME
+    popd
 
-echo Task [IV-1] /$HOST_MINGW/binutils/
-prepend_path PATH $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/bin
-rm -rf $BUILDDIR_MINGW/binutils && mkdir -p $BUILDDIR_MINGW/binutils
-pushd $BUILDDIR_MINGW/binutils
-saveenv
-saveenvvar CFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include -O2"
-saveenvvar CPPFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include"
-saveenvvar LDFLAGS "-L$BUILDDIR_MINGW/host-libs/zlib/lib -Wl,/usr/i686-w64-mingw32/lib/CRT_glob.o"
-$SRCDIR/$BINUTILS/configure --build=$BUILD \
-    --host=$HOST_MINGW \
-    --target=$TARGET \
-    --prefix=$INSTALLDIR_MINGW \
-    --infodir=$INSTALLDIR_MINGW_DOC/info \
-    --mandir=$INSTALLDIR_MINGW_DOC/man \
-    --htmldir=$INSTALLDIR_MINGW_DOC/html \
-    --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
-    --disable-nls \
-    --disable-sim \
-    --disable-gdb \
-    --enable-plugins \
-    --with-sysroot=$INSTALLDIR_MINGW/arm-none-eabi \
-    "--with-pkgversion=$PKGVERSION"
+    echo Task [IV-1] /$HOST_MINGW/binutils/
+    prepend_path PATH $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/bin
+    rm -rf $BUILDDIR_MINGW/binutils && mkdir -p $BUILDDIR_MINGW/binutils
+    pushd $BUILDDIR_MINGW/binutils
+    saveenv
+    saveenvvar CFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include $BUILD_OPTIONS"
+    saveenvvar CPPFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include"
+    saveenvvar LDFLAGS "-L$BUILDDIR_MINGW/host-libs/zlib/lib -Wl,/usr/i686-w64-mingw32/lib/CRT_glob.o"
+    $SRCDIR/$BINUTILS/configure --build=$BUILD \
+        --host=$HOST_MINGW \
+        --target=$TARGET \
+        --prefix=$INSTALLDIR_MINGW \
+        --infodir=$INSTALLDIR_MINGW_DOC/info \
+        --mandir=$INSTALLDIR_MINGW_DOC/man \
+        --htmldir=$INSTALLDIR_MINGW_DOC/html \
+        --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
+        --disable-nls \
+        --disable-sim \
+        --disable-gdb \
+        --enable-plugins \
+        --with-sysroot=$INSTALLDIR_MINGW/arm-none-eabi \
+        "--with-pkgversion=$PKGVERSION"
 
-if [ "x$DEBUG_BUILD_OPTIONS" != "x" ] ; then
-    make CFLAGS="-I$BUILDDIR_MINGW/host-libs/zlib/include $DEBUG_BUILD_OPTIONS" -j$JOBS
-else
     make -j$JOBS
-fi
 
-make install
+    make install
 
-if [ "x$skip_manual" != "xyes" ]; then
-	make install-html install-pdf
-fi
+    if [ "x$skip_manual" != "xyes" ]; then
+        make install-html install-pdf
+    fi
 
-restoreenv
-popd
+    restoreenv
+    popd
 
-pushd $INSTALLDIR_MINGW
-rm -rf ./lib
-popd
+    pushd $INSTALLDIR_MINGW
+    rm -rf ./lib
+    popd
 
-echo Task [IV-2] /$HOST_MINGW/copy_libs/
-if [ "x$skip_manual" != "xyes" ]; then
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/share/doc/gcc-arm-none-eabi/html $INSTALLDIR_MINGW_DOC/html
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/share/doc/gcc-arm-none-eabi/pdf $INSTALLDIR_MINGW_DOC/pdf
-fi
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/lib $INSTALLDIR_MINGW/arm-none-eabi/lib
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/include $INSTALLDIR_MINGW/arm-none-eabi/include
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/include/c++ $INSTALLDIR_MINGW/arm-none-eabi/include/c++
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/lib/gcc/arm-none-eabi $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi
+    echo Task [IV-2] /$HOST_MINGW/copy_libs/
+    if [ "x$skip_manual" != "xyes" ]; then
+        copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/share/doc/gcc-arm-none-eabi/html $INSTALLDIR_MINGW_DOC/html
+        copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/share/doc/gcc-arm-none-eabi/pdf $INSTALLDIR_MINGW_DOC/pdf
+    fi
+    copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/lib $INSTALLDIR_MINGW/arm-none-eabi/lib
+    copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/include $INSTALLDIR_MINGW/arm-none-eabi/include
+    copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/arm-none-eabi/include/c++ $INSTALLDIR_MINGW/arm-none-eabi/include/c++
+    copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/lib/gcc/arm-none-eabi $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi
 
-echo Task [IV-3] /$HOST_MINGW/gcc-final/
-saveenv
-saveenvvar AR_FOR_TARGET $TARGET-ar
-saveenvvar NM_FOR_TARGET $TARGET-nm
-saveenvvar OBJDUMP_FOR_TARET $TARGET-objdump
-saveenvvar STRIP_FOR_TARGET $TARGET-strip
-saveenvvar CC_FOR_TARGET $TARGET-gcc
-saveenvvar GCC_FOR_TARGET $TARGET-gcc
-saveenvvar CXX_FOR_TARGET $TARGET-g++
+    echo Task [IV-3] /$HOST_MINGW/gcc-final/
+    saveenv
+    saveenvvar AR_FOR_TARGET $TARGET-ar
+    saveenvvar NM_FOR_TARGET $TARGET-nm
+    saveenvvar OBJDUMP_FOR_TARET $TARGET-objdump
+    saveenvvar STRIP_FOR_TARGET $TARGET-strip
+    saveenvvar CC_FOR_TARGET $TARGET-gcc
+    saveenvvar GCC_FOR_TARGET $TARGET-gcc
+    saveenvvar CXX_FOR_TARGET $TARGET-g++
 
-pushd $INSTALLDIR_MINGW/arm-none-eabi/
-rm -f usr
-ln -s . usr
-popd
-rm -rf $BUILDDIR_MINGW/gcc && mkdir -p $BUILDDIR_MINGW/gcc
-pushd $BUILDDIR_MINGW/gcc
-$SRCDIR/$GCC/configure --build=$BUILD --host=$HOST_MINGW --target=$TARGET \
-    --prefix=$INSTALLDIR_MINGW \
-    --libexecdir=$INSTALLDIR_MINGW/lib \
-    --infodir=$INSTALLDIR_MINGW_DOC/info \
-    --mandir=$INSTALLDIR_MINGW_DOC/man \
-    --htmldir=$INSTALLDIR_MINGW_DOC/html \
-    --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
-    --enable-languages=c,c++ \
-    --enable-mingw-wildcard \
-    --disable-decimal-float \
-    --disable-libffi \
-    --disable-libgomp \
-    --disable-libmudflap \
-    --disable-libquadmath \
-    --disable-libssp \
-    --disable-libstdcxx-pch \
-    --disable-nls \
-    --disable-shared \
-    --disable-threads \
-    --disable-tls \
-    --with-gnu-as \
-    --with-gnu-ld \
-    --with-headers=yes \
-    --with-newlib \
-    --with-python-dir=share/gcc-arm-none-eabi \
-    --with-sysroot=$INSTALLDIR_MINGW/arm-none-eabi \
-    --with-libiconv-prefix=$BUILDDIR_MINGW/host-libs/usr \
-    --with-gmp=$BUILDDIR_MINGW/host-libs/usr \
-    --with-mpfr=$BUILDDIR_MINGW/host-libs/usr \
-    --with-mpc=$BUILDDIR_MINGW/host-libs/usr \
-    --with-isl=$BUILDDIR_MINGW/host-libs/usr \
-    --with-libelf=$BUILDDIR_MINGW/host-libs/usr \
-    "--with-host-libstdcxx=-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm" \
-    "--with-pkgversion=$PKGVERSION" \
-    ${MULTILIB_LIST}
+    pushd $INSTALLDIR_MINGW/arm-none-eabi/
+    rm -f usr
+    ln -s . usr
+    popd
+    rm -rf $BUILDDIR_MINGW/gcc && mkdir -p $BUILDDIR_MINGW/gcc
+    pushd $BUILDDIR_MINGW/gcc
+    $SRCDIR/$GCC/configure --build=$BUILD --host=$HOST_MINGW --target=$TARGET \
+        --prefix=$INSTALLDIR_MINGW \
+        --libexecdir=$INSTALLDIR_MINGW/lib \
+        --infodir=$INSTALLDIR_MINGW_DOC/info \
+        --mandir=$INSTALLDIR_MINGW_DOC/man \
+        --htmldir=$INSTALLDIR_MINGW_DOC/html \
+        --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
+        --enable-languages=c,c++ \
+        --enable-mingw-wildcard \
+        --disable-decimal-float \
+        --disable-libffi \
+        --disable-libgomp \
+        --disable-libmudflap \
+        --disable-libquadmath \
+        --disable-libssp \
+        --disable-libstdcxx-pch \
+        --disable-nls \
+        --disable-shared \
+        --disable-threads \
+        --disable-tls \
+        --with-gnu-as \
+        --with-gnu-ld \
+        --with-headers=yes \
+        --with-newlib \
+        --with-python-dir=share/gcc-arm-none-eabi \
+        --with-sysroot=$INSTALLDIR_MINGW/arm-none-eabi \
+        --with-libiconv-prefix=$BUILDDIR_MINGW/host-libs/usr \
+        --with-gmp=$BUILDDIR_MINGW/host-libs/usr \
+        --with-mpfr=$BUILDDIR_MINGW/host-libs/usr \
+        --with-mpc=$BUILDDIR_MINGW/host-libs/usr \
+        --with-isl=$BUILDDIR_MINGW/host-libs/usr \
+        --with-libelf=$BUILDDIR_MINGW/host-libs/usr \
+        "--with-host-libstdcxx=-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm" \
+        "--with-pkgversion=$PKGVERSION" \
+        ${MULTILIB_LIST}
 
-if [ "x$DEBUG_BUILD_OPTIONS" != "x" ]; then
-  make -j$JOBS CXXFLAGS="$DEBUG_BUILD_OPTIONS" all-gcc
-else
-  make -j$JOBS all-gcc
-fi
+    make -j$JOBS all-gcc
 
-make  install-gcc
+    make install-gcc
 
-if [ "x$skip_manual" != "xyes" ]; then
-	make install-html-gcc install-pdf-gcc
-fi
-popd
+    if [ "x$skip_manual" != "xyes" ]; then
+        make install-html-gcc install-pdf-gcc
+    fi
+    popd
 
-pushd $INSTALLDIR_MINGW
-rm -rf bin/arm-none-eabi-gccbug
-rm -rf  include
-popd
+    pushd $INSTALLDIR_MINGW
+    rm -rf bin/arm-none-eabi-gccbug
+    rm -rf  include
+    popd
 
-copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/lib/gcc/arm-none-eabi $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi
-rm -rf $INSTALLDIR_MINGW/arm-none-eabi/usr
-rm -rf $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi/*/plugin
-find $INSTALLDIR_MINGW -executable -and -not -type d -and -not -name \*.exe \
-  -and -not -name liblto_plugin-0.dll -exec rm -f \{\} \;
-restoreenv
+    copy_dir $BUILDDIR_MINGW/tools-$OBJ_SUFFIX_NATIVE/lib/gcc/arm-none-eabi $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi
+    rm -rf $INSTALLDIR_MINGW/arm-none-eabi/usr
+    rm -rf $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi/*/plugin
+    find $INSTALLDIR_MINGW -executable -and -not -type d -and -not -name \*.exe \
+      -and -not -name liblto_plugin-0.dll -exec rm -f \{\} \;
+    restoreenv
 
-echo Task [IV-4] /$HOST_MINGW/gdb/
-build_mingw_gdb()
-{
-	MINGW_GDB_CONF_OPTS=$1
-	rm -rf $BUILDDIR_MINGW/gdb && mkdir -p $BUILDDIR_MINGW/gdb
-	pushd $BUILDDIR_MINGW/gdb
-	saveenv
-	saveenvvar CFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include -O2"
-	saveenvvar CPPFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include"
-	saveenvvar LDFLAGS "-L$BUILDDIR_MINGW/host-libs/zlib/lib -Wl,/usr/i686-w64-mingw32/lib/CRT_glob.o"
-	$SRCDIR/$GDB/configure --build=$BUILD \
-	    --host=$HOST_MINGW \
-	    --target=$TARGET \
-	    --prefix=$INSTALLDIR_MINGW \
-	    --infodir=$INSTALLDIR_MINGW_DOC/info \
-	    --mandir=$INSTALLDIR_MINGW_DOC/man \
-	    --htmldir=$INSTALLDIR_MINGW_DOC/html \
-	    --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
-	    --disable-nls \
-	    --disable-sim \
-	    --disable-gas \
-	    --disable-binutils \
-	    --disable-ld \
-	    --disable-gprof \
-	    --with-lzma=no \
-	    $MINGW_GDB_CONF_OPTS \
-	    --with-libexpat \
-	    --with-libexpat-prefix=$BUILDDIR_MINGW/host-libs/usr \
-	    --with-libiconv-prefix=$BUILDDIR_MINGW/host-libs/usr \
-	    --with-system-gdbinit=$INSTALLDIR_MINGW/$HOST_MINGW/arm-none-eabi/lib/gdbinit \
-	    '--with-gdb-datadir='\''${prefix}'\''/arm-none-eabi/share/gdb' \
-	    "--with-pkgversion=$PKGVERSION"
+    echo Task [IV-4] /$HOST_MINGW/gdb/
+    build_mingw_gdb()
+    {
+        MINGW_GDB_CONF_OPTS=$1
+        rm -rf $BUILDDIR_MINGW/gdb && mkdir -p $BUILDDIR_MINGW/gdb
+        pushd $BUILDDIR_MINGW/gdb
+        saveenv
+        saveenvvar CFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include $BUILD_OPTIONS"
+        saveenvvar CPPFLAGS "-I$BUILDDIR_MINGW/host-libs/zlib/include"
+        saveenvvar LDFLAGS "-L$BUILDDIR_MINGW/host-libs/zlib/lib -Wl,/usr/i686-w64-mingw32/lib/CRT_glob.o"
+        $SRCDIR/$GDB/configure --build=$BUILD \
+            --host=$HOST_MINGW \
+            --target=$TARGET \
+            --prefix=$INSTALLDIR_MINGW \
+            --infodir=$INSTALLDIR_MINGW_DOC/info \
+            --mandir=$INSTALLDIR_MINGW_DOC/man \
+            --htmldir=$INSTALLDIR_MINGW_DOC/html \
+            --pdfdir=$INSTALLDIR_MINGW_DOC/pdf \
+            --disable-nls \
+            --disable-sim \
+            --disable-gas \
+            --disable-binutils \
+            --disable-ld \
+            --disable-gprof \
+            --with-lzma=no \
+            $MINGW_GDB_CONF_OPTS \
+            --with-libexpat \
+            --with-libexpat-prefix=$BUILDDIR_MINGW/host-libs/usr \
+            --with-libiconv-prefix=$BUILDDIR_MINGW/host-libs/usr \
+            --with-system-gdbinit=$INSTALLDIR_MINGW/$HOST_MINGW/arm-none-eabi/lib/gdbinit \
+            '--with-gdb-datadir='\''${prefix}'\''/arm-none-eabi/share/gdb' \
+            "--with-pkgversion=$PKGVERSION"
 
-	if [ "x$DEBUG_BUILD_OPTIONS" != "x" ] ; then
-	    make CFLAGS="-I$BUILDDIR_MINGW/host-libs/zlib/include $DEBUG_BUILD_OPTIONS" -j$JOBS
-	else
-	    make -j$JOBS
-	fi
+        make -j$JOBS
 
-	make install
-	if [ "x$skip_manual" != "xyes" ]; then
-		make install-html install-pdf
-	fi
+        make install
+        if [ "x$skip_manual" != "xyes" ]; then
+            make install-html install-pdf
+        fi
 
-	restoreenv
-	popd
-}
+        restoreenv
+        popd
+    }
 
-build_mingw_gdb "--with-python=no"
+    build_mingw_gdb "--with-python=no"
 
-if [ "x$skip_mingw32_gdb_with_python" == "xno" ]; then
-    export GNURM_PYTHON_WIN_DIR=$SRCDIR/$PYTHON_WIN
-    build_mingw_gdb "--with-python=$script_path/python-config.sh --program-suffix=-py --program-prefix=$TARGET-"
-fi
+    if [ "x$skip_mingw32_gdb_with_python" == "xno" ]; then
+        export GNURM_PYTHON_WIN_DIR=$SRCDIR/$PYTHON_WIN
+        build_mingw_gdb "--with-python=$script_path/python-config.sh --program-suffix=-py --program-prefix=$TARGET-"
+    fi
 
-echo Task [IV-5] /$HOST_MINGW/pretidy/
-pushd $INSTALLDIR_MINGW
-rm -rf ./lib/libiberty.a
-rm -rf $INSTALLDIR_MINGW_DOC/info
-rm -rf $INSTALLDIR_MINGW_DOC/man
+    echo Task [IV-5] /$HOST_MINGW/pretidy/
+    pushd $INSTALLDIR_MINGW
+    rm -rf ./lib/libiberty.a
+    rm -rf $INSTALLDIR_MINGW_DOC/info
+    rm -rf $INSTALLDIR_MINGW_DOC/man
 
-find $INSTALLDIR_MINGW -name '*.la' -exec rm '{}' ';'
+    find $INSTALLDIR_MINGW -name '*.la' -exec rm '{}' ';'
 
-echo Task [IV-6] /$HOST_MINGW/strip_host_objects/
-STRIP_BINARIES=`find $INSTALLDIR_MINGW/bin/ -name arm-none-eabi-\*.exe`
-if [ "x$DEBUG_BUILD_OPTIONS" = "x" ] ; then
-    for bin in $STRIP_BINARIES ; do
-        strip_binary $HOST_MINGW_TOOL-strip $bin
-    done
+    echo Task [IV-6] /$HOST_MINGW/strip_host_objects/
+    STRIP_BINARIES=$(find $INSTALLDIR_MINGW/bin/ -name arm-none-eabi-\*.exe)
+    if [ "x$is_debug_build" == "xno" ] ; then
+        for bin in $STRIP_BINARIES ; do
+            strip_binary $HOST_MINGW_TOOL-strip $bin
+        done
 
-    STRIP_BINARIES=`find $INSTALLDIR_MINGW/arm-none-eabi/bin/ -maxdepth 1 -mindepth 1 -name \*.exe`
-    for bin in $STRIP_BINARIES ; do
-        strip_binary $HOST_MINGW_TOOL-strip $bin
-    done
+        STRIP_BINARIES=$(find $INSTALLDIR_MINGW/arm-none-eabi/bin/ -maxdepth 1 -mindepth 1 -name \*.exe)
+        for bin in $STRIP_BINARIES ; do
+            strip_binary $HOST_MINGW_TOOL-strip $bin
+        done
 
-    STRIP_BINARIES=`find $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi/$GCC_VER/ -name \*.exe`
-    for bin in $STRIP_BINARIES ; do
-        strip_binary $HOST_MINGW_TOOL-strip $bin
-    done
-fi
+        STRIP_BINARIES=$(find $INSTALLDIR_MINGW/lib/gcc/arm-none-eabi/$GCC_VER/ -name \*.exe)
+        for bin in $STRIP_BINARIES ; do
+            strip_binary $HOST_MINGW_TOOL-strip $bin
+        done
+    fi
 
-echo Task [IV-7] /$HOST_MINGW/installation/
-rm -f $PACKAGEDIR/$PACKAGE_NAME_MINGW.exe
-pushd $BUILDDIR_MINGW
-rm -f $INSTALL_PACKAGE_NAME
-cp $ROOT/$RELEASE_FILE $INSTALLDIR_MINGW_DOC/
-cp $ROOT/$README_FILE $INSTALLDIR_MINGW_DOC/
-cp $ROOT/$LICENSE_FILE $INSTALLDIR_MINGW_DOC/
-copy_dir_clean $SRCDIR/$SAMPLES $INSTALLDIR_MINGW/share/gcc-arm-none-eabi/$SAMPLES
-flip -m $INSTALLDIR_MINGW_DOC/$RELEASE_FILE
-flip -m $INSTALLDIR_MINGW_DOC/$README_FILE
-flip -m -b $INSTALLDIR_MINGW_DOC/$LICENSE_FILE
-flip -m $INSTALLDIR_MINGW/share/gcc-arm-none-eabi/$SAMPLES_DOS_FILES
-rm -rf $INSTALLDIR_MINGW/include
-ln -s $INSTALLDIR_MINGW $INSTALL_PACKAGE_NAME
+    echo Task [IV-7] /$HOST_MINGW/installation/
+    rm -f $PACKAGEDIR/$PACKAGE_NAME_MINGW.exe
+    pushd $BUILDDIR_MINGW
+    rm -f $INSTALL_PACKAGE_NAME
+    cp $ROOT/$RELEASE_FILE $INSTALLDIR_MINGW_DOC/
+    cp $ROOT/$README_FILE $INSTALLDIR_MINGW_DOC/
+    cp $ROOT/$LICENSE_FILE $INSTALLDIR_MINGW_DOC/
+    copy_dir_clean $SRCDIR/$SAMPLES $INSTALLDIR_MINGW/share/gcc-arm-none-eabi/$SAMPLES
+    flip -m $INSTALLDIR_MINGW_DOC/$RELEASE_FILE
+    flip -m $INSTALLDIR_MINGW_DOC/$README_FILE
+    flip -m -b $INSTALLDIR_MINGW_DOC/$LICENSE_FILE
+    flip -m $INSTALLDIR_MINGW/share/gcc-arm-none-eabi/$SAMPLES_DOS_FILES
+    rm -rf $INSTALLDIR_MINGW/include
+    ln -s $INSTALLDIR_MINGW $INSTALL_PACKAGE_NAME
 
-cp $SRCDIR/$INSTALLATION/gccvar.bat $INSTALLDIR_MINGW/bin
-mkdir -p $SRCDIR/$INSTALLATION/output
-makensis -DBaseDir=$INSTALLDIR_MINGW  \
-         -DIncDir=$SRCDIR \
-         -DAppName="$APPNAME" \
-         -DAppNameStr="$PKGVERSION"   \
-         -DPackageName=$PACKAGE_NAME_MINGW   \
-         -DInstallDirBase="$INSTALLBASE"   \
-         -DInstallDirVer="$GCC_VER_SHORT $RELEASEVER" \
-         "-XOutFile $SRCDIR/$INSTALLATION/output/$PACKAGE_NAME_MINGW.exe"    \
-         $SRCDIR/$INSTALLATION/arm-none-eabi-gnu-tools.nsi
+    cp $SRCDIR/$INSTALLATION/gccvar.bat $INSTALLDIR_MINGW/bin
+    mkdir -p $SRCDIR/$INSTALLATION/output
+    makensis -DBaseDir=$INSTALLDIR_MINGW  \
+             -DIncDir=$SRCDIR \
+             -DAppName="$APPNAME" \
+             -DAppNameStr="$PKGVERSION"   \
+             -DPackageName=$PACKAGE_NAME_MINGW   \
+             -DInstallDirBase="$INSTALLBASE"   \
+             -DInstallDirVer="$GCC_VER_SHORT $RELEASEVER" \
+             "-XOutFile $SRCDIR/$INSTALLATION/output/$PACKAGE_NAME_MINGW.exe"    \
+             $SRCDIR/$INSTALLATION/arm-none-eabi-gnu-tools.nsi
 
-cp -rf $SRCDIR/$INSTALLATION/output/$PACKAGE_NAME_MINGW.exe $PACKAGEDIR/
-rm -f $INSTALL_PACKAGE_NAME
-popd
-restoreenv
+    cp -rf $SRCDIR/$INSTALLATION/output/$PACKAGE_NAME_MINGW.exe $PACKAGEDIR/
+    rm -f $INSTALL_PACKAGE_NAME
+    popd
+    restoreenv
 
-echo Task [IV-8] /Package toolchain in zip format/
-pushd $INSTALLDIR_MINGW
-rm -f $PACKAGEDIR/$PACKAGE_NAME_MINGW.zip
-zip -r9 $PACKAGEDIR/$PACKAGE_NAME_MINGW.zip .
-popd
+    echo Task [IV-8] /Package toolchain in zip format/
+    pushd $INSTALLDIR_MINGW
+    rm -f $PACKAGEDIR/$PACKAGE_NAME_MINGW.zip
+    zip -r9 $PACKAGEDIR/$PACKAGE_NAME_MINGW.zip .
+    popd
 fi #end of if [ "x$skip_mingw32" != "xyes" ] ;
 
-echo Task [V-0] /package_sources/
-pushd $PACKAGEDIR
-rm -rf $PACKAGE_NAME && mkdir -p $PACKAGE_NAME/src
-pack_dir_clean $SRCDIR $BINUTILS $PACKAGE_NAME/src/$BINUTILS.tar.bz2
-pack_dir_clean $SRCDIR $GCC $PACKAGE_NAME/src/$GCC.tar.bz2
-pack_dir_clean $SRCDIR $GDB $PACKAGE_NAME/src/$GDB.tar.bz2 \
-  --exclude="gdb/testsuite/config/qemu.exp" --exclude="sim"
-pack_dir_clean $SRCDIR $NEWLIB $PACKAGE_NAME/src/$NEWLIB.tar.bz2
-pack_dir_clean $SRCDIR $SAMPLES $PACKAGE_NAME/src/$SAMPLES.tar.bz2
-pack_dir_clean $SRCDIR $BUILD_MANUAL $PACKAGE_NAME/src/$BUILD_MANUAL.tar.bz2
-if [ "x$skip_mingw32" != "xyes" ] ; then
-    pack_dir_clean $SRCDIR $INSTALLATION \
-      $PACKAGE_NAME/src/$INSTALLATION.tar.bz2 \
-      --exclude=build.log --exclude=output
-fi
-cp $ROOT/$RELEASE_FILE $PACKAGE_NAME/
-cp $ROOT/$README_FILE $PACKAGE_NAME/
-cp $ROOT/$LICENSE_FILE $PACKAGE_NAME/
-cp $ROOT/$BUILD_MANUAL_FILE $PACKAGE_NAME/
-cp $script_path/install-sources.sh $PACKAGE_NAME/
-cp $script_path/build-common.sh $PACKAGE_NAME/
-cp $script_path/build-prerequisites.sh $PACKAGE_NAME/
-cp $script_path/build-toolchain.sh $PACKAGE_NAME/
-cp $script_path/python-config.sh $PACKAGE_NAME/
-tar cjf $PACKAGE_NAME-src.tar.bz2 $PACKAGE_NAME
-rm -rf $PACKAGE_NAME
-popd
+if [ "x$skip_package_sources" != "xyes" ]; then
+    echo Task [V-0] /package_sources/
+    pushd "$PACKAGEDIR"
+    rm -rf "$PACKAGE_NAME" && mkdir -p "$PACKAGE_NAME/src"
+    pack_dir_clean "$SRCDIR" "$BINUTILS" "$PACKAGE_NAME/src/$BINUTILS.tar.bz2" \
+      --exclude="gdb/testsuite/config/qemu.exp" --exclude="sim"
+    pack_dir_clean "$SRCDIR" "$GCC" "$PACKAGE_NAME/src/$GCC.tar.bz2"
+    pack_dir_clean "$SRCDIR" "$GDB" "$PACKAGE_NAME/src/$GDB.tar.bz2" \
+      --exclude="gdb/testsuite/config/qemu.exp" --exclude="sim"
+    pack_dir_clean "$SRCDIR" "$NEWLIB" "$PACKAGE_NAME/src/$NEWLIB.tar.bz2"
+    pack_dir_clean "$SRCDIR" "$SAMPLES" "$PACKAGE_NAME/src/$SAMPLES.tar.bz2"
 
-echo Task [V-1] /md5_checksum/
-pushd $PACKAGEDIR
-rm -rf md5.txt
-$MD5 $PACKAGE_NAME_NATIVE.tar.bz2     >>md5.txt
-if [ "x$skip_mingw32" != "xyes" ] ; then
-    $MD5 $PACKAGE_NAME_MINGW.exe         >>md5.txt
-    $MD5 $PACKAGE_NAME_MINGW.zip         >>md5.txt
+    if [ "x$is_ppa_release" != "xyes" ] && [ "x$skip_howto" != "xyes" ]; then
+        pack_dir_clean "$SRCDIR" "$BUILD_MANUAL" "$PACKAGE_NAME/src/$BUILD_MANUAL.tar.bz2"
+    fi
+
+    if [ "x$skip_mingw32" != "xyes" ] ; then
+        pack_dir_clean "$SRCDIR" "$INSTALLATION" \
+          "$PACKAGE_NAME/src/$INSTALLATION.tar.bz2" \
+          --exclude=build.log --exclude=output
+    fi
+    cp "$ROOT/$RELEASE_FILE" "$PACKAGE_NAME/"
+    cp "$ROOT/$README_FILE" "$PACKAGE_NAME/"
+    cp "$ROOT/$LICENSE_FILE" "$PACKAGE_NAME/"
+
+    if [ "x$is_ppa_release" != "xyes" ] && [ "x$skip_howto" != "xyes" ]; then
+        cp "$ROOT/$BUILD_MANUAL_FILE" "$PACKAGE_NAME/"
+    fi
+
+    cp "$script_path/install-sources.sh" "$PACKAGE_NAME/"
+    cp "$script_path/build-common.sh" "$PACKAGE_NAME/"
+    cp "$script_path/build-prerequisites.sh" "$PACKAGE_NAME/"
+    cp "$script_path/build-toolchain.sh" "$PACKAGE_NAME/"
+    cp "$script_path/python-config.sh" "$PACKAGE_NAME/"
+
+    tar cf "$PACKAGE_NAME-src.tar.bz2" "$PACKAGE_NAME" ${TAR_FLAGS:-}
+    rm -rf "$PACKAGE_NAME"
+    popd
 fi
-$MD5 $PACKAGE_NAME-src.tar.bz2 >>md5.txt
-popd
+
+if [ "x$skip_md5_checksum" != "xyes" ]; then
+    echo Task [V-1] /md5_checksum/
+    pushd "$PACKAGEDIR"
+    MD5_CHECKSUM_FILE="md5-$(uname -m)-$(uname | tr '[:upper:]' '[:lower:]').txt"
+    rm -rf "$MD5_CHECKSUM_FILE"
+    $MD5 "$PACKAGE_NAME_NATIVE.tar.bz2" > "$MD5_CHECKSUM_FILE"
+    
+    if [ "$(uname)" = "Darwin" ]; then
+        $MD5 "$PACKAGE_NAME_NATIVE.pkg" >> "$MD5_CHECKSUM_FILE"
+    fi
+
+    if [ "x$skip_mingw32" != "xyes" ] ; then
+        $MD5 "$PACKAGE_NAME_MINGW.exe" >> "$MD5_CHECKSUM_FILE"
+        $MD5 "$PACKAGE_NAME_MINGW.zip" >> "$MD5_CHECKSUM_FILE"
+    fi
+
+    if [ "x$skip_package_sources" != "xyes" ]; then
+        $MD5 "$PACKAGE_NAME-src.tar.bz2" >> "$MD5_CHECKSUM_FILE"
+    fi
+    popd
+fi

@@ -1,5 +1,5 @@
 #! /usr/bin/env bash
-# Copyright (c) 2011-2015, ARM Limited
+# Copyright (c) 2011-2019, ARM Limited
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,10 @@ set -x
 set -u
 set -o pipefail
 
+if [[ "$(uname)" != "Darwin" ]]; then
+  PS4='+$(date +%Y-%m-%d:%H:%M:%S) (${BASH_SOURCE}:${LINENO}): ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+fi
+
 umask 022
 
 exec < /dev/null
@@ -48,7 +52,7 @@ script_path=`cd $(dirname $0) && pwd -P`
 usage ()
 {
 cat<<EOF
-Usage: $0 [--skip_steps=...]
+Usage: $(basename $0) [--skip_steps=...]
 
 This script will build dependent libraries for GNU Tools Arm Embedded toolchain.
 
@@ -72,41 +76,55 @@ for ac_arg; do
         --skip_steps=*)
             skip_steps=`echo $ac_arg | sed -e "s/--skip_steps=//g" -e "s/,/ /g"`
             ;;
+        --help|-h)
+            usage
+            exit 1
+            ;;
         *)
             usage
-	    exit 1
-            ;;
+            exit 1
+        ;;
     esac
 done
 
 if [ "x$skip_steps" != "x" ]; then
-        for ss in $skip_steps; do
-                case $ss in
-                    mingw32)
-                      skip_mingw32=yes
-                      ;;
-                    *)
-                      echo "Unknown build steps: $ss" 1>&2
-                      usage
-                      exit 1
-                      ;;
-                esac
-        done
+    for ss in $skip_steps; do
+        case $ss in
+            mingw32)
+                skip_mingw32=yes
+                ;;
+            howto | package_sources | md5_checksum)
+                ;;
+            *)
+                echo "Unknown build steps: $ss" 1>&2
+                usage
+                exit 1
+                ;;
+        esac
+    done
 fi
 
 if [ "x$BUILD" == "xx86_64-apple-darwin10" ]; then
   skip_mingw32=yes
 fi
 
-rm -rf $BUILDDIR_NATIVE && mkdir -p $BUILDDIR_NATIVE
-rm -rf $INSTALLDIR_NATIVE && mkdir -p $INSTALLDIR_NATIVE
-if [ "x$skip_mingw32" != "xyes" ] ; then
-rm -rf $BUILDDIR_MINGW && mkdir -p $BUILDDIR_MINGW
-rm -rf $INSTALLDIR_MINGW && mkdir -p $INSTALLDIR_MINGW
-fi
-rm -rf $PACKAGEDIR && mkdir -p $PACKAGEDIR
+rm -rf "$BUILDDIR_NATIVE"
+mkdir -p "$BUILDDIR_NATIVE"
 
-cd $SRCDIR
+rm -rf "$INSTALLDIR_NATIVE"
+mkdir -p "$INSTALLDIR_NATIVE"
+
+if [ "x$skip_mingw32" != "xyes" ] ; then
+    rm -rf "$BUILDDIR_MINGW"
+    mkdir -p "$BUILDDIR_MINGW"
+    rm -rf "$INSTALLDIR_MINGW"
+    mkdir -p "$INSTALLDIR_MINGW"
+fi
+
+rm -rf "$PACKAGEDIR"
+mkdir -p "$PACKAGEDIR"
+
+cd "$SRCDIR"
 
 echo Task [I-0] /$HOST_NATIVE/zlib/
 rm -rf $BUILDDIR_NATIVE/zlib
@@ -210,9 +228,6 @@ $SRCDIR/$EXPAT/configure \
 make -j$JOBS
 make install
 popd
-
-# for Raspberry Pi, always skip mingw32
-exit 0
 
 # skip building mingw32 toolchain if "--skip_mingw32" specified
 if [ "x$skip_mingw32" == "xyes" ] ; then
