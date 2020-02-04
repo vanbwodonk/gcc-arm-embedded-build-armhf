@@ -6,7 +6,7 @@ Source:https://launchpad.net/~terry.guo/+archive/gcc-arm-embedded
 ### install on Raspberry Pi
 install via raspberry pi terminal:
 ```bash
-wget https://github.com/vanbwodonk/gcc-arm-embedded-build-armhf/raw/master/pkg/gcc-arm-none-eabi-8-2019-q3-update-linux-armv7l.tar.bz2
+wget https://github.com/vanbwodonk/gcc-arm-embedded-build-armhf/releases/download/8-2019-q3-update/gcc-arm-none-eabi-8-2019-q3-update-linux-armv7l.tar.bz2
 tar -xvf gcc-arm-none-eabi-8-2019-q3-update-linux-armv7l.tar.bz2
 sudo cp -r gcc-arm-none-eabi-8-2019-q3-update/* /usr/
 sudo rm -r gcc-arm-none-eabi-8-2019-q3-update
@@ -15,7 +15,7 @@ sudo rm -r gcc-arm-none-eabi-8-2019-q3-update
 ### install on Jetson TX2       
 install via jetson TX2 terminal:
 ```bash
-wget https://github.com/vanbwodonk/gcc-arm-embedded-build-armhf/raw/master/pkg/gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64.tar.bz2
+https://github.com/vanbwodonk/gcc-arm-embedded-build-armhf/releases/download/8-2019-q3-update/gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64.tar.bz2
 tar -xvf gcc-arm-none-eabi-8-2019-q3-update-linux-aarch64.tar.bz2
 sudo cp -r gcc-arm-none-eabi-8-2019-q3-update/* /usr/
 sudo rm -r gcc-arm-none-eabi-8-2019-q3-update
