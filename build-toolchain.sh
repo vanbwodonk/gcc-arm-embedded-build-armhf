@@ -80,18 +80,18 @@ if [ $# -gt 3 ] ; then
     usage
 fi
 
-skip_mingw32=no
+skip_mingw32=yes
 BUILD_OPTIONS="-g -O2"
 is_ppa_release=no
 is_native_build=yes
 is_debug_build=no
-skip_manual=no
-skip_howto=no
+skip_manual=yes
+skip_howto=yes
 skip_package_sources=no
 skip_md5_checksum=no
 skip_steps=
-skip_gdb_with_python=no
-skip_mingw32_gdb_with_python=no
+skip_gdb_with_python=yes
+skip_mingw32_gdb_with_python=yes
 build_type=
 
 MULTILIB_LIST="--with-multilib-list=rmprofile"

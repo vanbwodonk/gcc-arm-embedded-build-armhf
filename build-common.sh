@@ -305,7 +305,7 @@ if [ "x$uname_string" == "xlinux" ] ; then
     HOST_NATIVE="$host_arch"-linux-gnu
     READLINK=readlink
     #JOBS=`grep ^processor /proc/cpuinfo|wc -l`
-    JOBS=2
+    JOBS=1
     GCC_CONFIG_OPTS_LCPP="--with-host-libstdcxx=-static-libgcc -Wl,-Bstatic,-lstdc++,-Bdynamic -lm"
     MD5="md5sum -b"
     PACKAGE_NAME_SUFFIX="${host_arch}-linux"
